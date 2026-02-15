@@ -1,0 +1,7 @@
+{
+  "name": "WealthShare Manager",
+  "description": "A comprehensive savings and loan group management system with automated business rules, loan tracking, and real-time financial dashboards.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
