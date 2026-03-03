@@ -732,3 +732,5 @@ export const Loans: React.FC = () => {
     </div>
   );
 };
+
+export default Loans;

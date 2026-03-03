@@ -356,7 +356,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     const dateValidation = validateDate(date);
     if (!dateValidation.valid) {
-      return "Validation Failed: Invalid date provided.";
+      return `Validation Failed: ${dateValidation.error}`;
     }
     const notesValidation = validateNotes(notes);
     if (!notesValidation.valid) {

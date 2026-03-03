@@ -12,9 +12,12 @@ export const validatePositiveNumber = (value: any): boolean => {
 };
 
 // Validate date in YYYY-MM-DD format
-export const validateDate = (dateStr: string): boolean => {
+export const validateDate = (dateStr: string): { valid: boolean; error?: string } => {
   const date = new Date(dateStr);
-  return !isNaN(date.getTime()) && dateStr.match(/^\d{4}-\d{2}-\d{2}$/) !== null;
+  if (isNaN(date.getTime()) || !dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return { valid: false, error: 'Invalid date format. Use YYYY-MM-DD.' };
+  }
+  return { valid: true };
 };
 
 // Validate member name

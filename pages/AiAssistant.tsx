@@ -467,3 +467,5 @@ export const AiAssistant: React.FC = () => {
     </div>
   );
 };
+
+export default AiAssistant;
