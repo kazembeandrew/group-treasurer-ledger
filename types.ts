@@ -29,6 +29,8 @@ export interface Transaction {
   amount: number;
   related_loan_id?: string;
   notes: string;
+  created_at?: string; // ISO String
+  last_modified?: string; // ISO String for sync conflict resolution
 }
 
 export interface Loan {
@@ -36,6 +38,7 @@ export interface Loan {
   memberId: string;
   amount_given: number;
   interest_rate: number;
+  interest_amount?: number; // Explicitly stored interest amount
   date_given: string;
   due_date: string;
 }
@@ -45,6 +48,16 @@ export interface Notification {
   message: string;
   type: 'info' | 'warning' | 'error' | 'success';
   date: string;
+}
+
+export interface AuditLog {
+  id: string;
+  action_type: 'CREATED' | 'UPDATED' | 'DELETED';
+  table_name: string;
+  record_id: string;
+  details: string;
+  device_id: string;
+  timestamp: string;
 }
 
 export type ActionType = 
@@ -79,6 +92,9 @@ export interface ActionDraft {
   accountType?: AccountType; // For ADD_ACCOUNT
   interestRate?: number; // For CREATE_LOAN
   fundType?: 'PRINCIPAL' | 'INTEREST'; // For TRANSFER
+  
+  // Execution State
+  status?: 'PENDING' | 'DONE' | 'FAILED';
 }
 
 export interface ChatMessage {

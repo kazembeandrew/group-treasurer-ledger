@@ -1,13 +1,31 @@
-
 import { createClient } from '@supabase/supabase-js';
 
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+// Priority: Environment Variables (Netlify/Vite) -> Hardcoded Fallbacks -> Mock Mode
+// ============================================================================
+
+// Check for environment variables injected by Vite
+const ENV_SUPABASE_URL = (import.meta as any).env.VITE_SUPABASE_URL;
+const ENV_SUPABASE_KEY = (import.meta as any).env.VITE_SUPABASE_ANON_KEY;
+
+// Hardcoded fallbacks (for local/demo purposes if env vars are missing)
+const FALLBACK_URL = "https://gntyaxyjlppapkfonkpj.supabase.co";
+const FALLBACK_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdudHlheHlqbHBwYXBrZm9ua3BqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMDMyODAsImV4cCI6MjA4NjY3OTI4MH0.tNdPj5lN6WfDeMpgvM5D5n4NuIzhT61DrKBDTmUXdys";
+
+const SUPABASE_URL = ENV_SUPABASE_URL || FALLBACK_URL;
+const SUPABASE_ANON_KEY = ENV_SUPABASE_KEY || FALLBACK_KEY;
+const FORCE_OFFLINE = (import.meta as any).env.VITE_OFFLINE_MODE === 'true';
+
+// ============================================================================
+
 // Local Storage Mock Client for Offline Mode
-// Defined first to be available for fallback
 const createMockClient = () => {
   const getTable = (table: string) => {
     try {
       const data = localStorage.getItem(`wealthshare_${table}`);
-      return data ? JSON.parse(data) : [];
+      return data ? JSON.parse(atob(data)) : [];
     } catch (e) {
       return [];
     }
@@ -15,7 +33,7 @@ const createMockClient = () => {
   
   const setTable = (table: string, data: any[]) => {
     try {
-      localStorage.setItem(`wealthshare_${table}`, JSON.stringify(data));
+      localStorage.setItem(`wealthshare_${table}`, btoa(JSON.stringify(data)));
     } catch (e) {
       console.error("LocalStorage write failed", e);
     }
@@ -26,7 +44,6 @@ const createMockClient = () => {
       select: (query?: string) => {
         let currentData = getTable(table);
         
-        // Return a 'Thenable' builder object to allow chaining .order() or awaiting results
         const builder = {
           order: (column: string, { ascending = true } = {}) => {
             currentData.sort((a: any, b: any) => {
@@ -36,7 +53,6 @@ const createMockClient = () => {
             });
             return builder;
           },
-          // Make the object thenable so it can be awaited
           then: (onfulfilled?: (value: any) => any, onrejected?: (reason: any) => any) => {
             const result = { data: currentData, error: null };
             return Promise.resolve(result).then(onfulfilled, onrejected);
@@ -67,33 +83,34 @@ const createMockClient = () => {
           return Promise.resolve({ data: null, error: null });
         },
         neq: (col: string, val: any) => {
-          // Used for resetData: delete where id != '000...'
           const current = getTable(table);
           const newData = current.filter((item: any) => item[col] === val);
           setTable(table, newData);
           return Promise.resolve({ data: null, error: null });
         }
       })
-    })
+    }),
+    auth: {
+      getSession: () => Promise.resolve({ data: { session: { user: { id: 'offline-user', email: 'offline@wealthshare.local' }, access_token: 'mock-token', token_type: 'bearer', expires_in: 3600, refresh_token: 'mock-refresh' } }, error: null }),
+      onAuthStateChange: (callback: any) => {
+        // Trigger initial state
+        callback('SIGNED_IN', { user: { id: 'offline-user' } });
+        return { data: { subscription: { unsubscribe: () => {} } } };
+      },
+      signInWithPassword: () => Promise.resolve({ data: { session: { user: { id: 'offline-user' } } }, error: null }),
+      signUp: () => Promise.resolve({ data: { user: { id: 'offline-user' } }, error: null }),
+      signOut: () => {
+         // In a real mock, we might clear a flag, but for now we just resolve
+         return Promise.resolve({ error: null });
+      }
+    }
   };
 };
 
-// 1. Try process.env (Build time / Vercel envs)
-const envUrl = process.env.VITE_SUPABASE_URL;
-const envKey = process.env.VITE_SUPABASE_ANON_KEY;
-
-// 2. Try LocalStorage (User entered in Settings)
-const storedUrl = localStorage.getItem('wealthshare_supabase_url');
-const storedKey = localStorage.getItem('wealthshare_supabase_key');
-
-// Prioritize stored keys if they exist (allows overriding env vars via UI)
-const supabaseUrl = storedUrl || envUrl || '';
-const supabaseAnonKey = storedKey || envKey || '';
-
-// Validate URL format helper
-const isValidUrl = (urlString: string) => {
+const isValidUrl = (urlString: string | undefined) => {
+  if (!urlString) return false;
   try { 
-    return Boolean(new URL(urlString)); 
+    return urlString.startsWith('http');
   } catch(e) { 
     return false; 
   }
@@ -103,21 +120,18 @@ let client;
 let mode = false;
 
 // Attempt to initialize Supabase client
-if (isValidUrl(supabaseUrl) && supabaseAnonKey && supabaseAnonKey.length > 0) {
+// We check if the URL is valid and contains the real supabase URL pattern
+if (!FORCE_OFFLINE && isValidUrl(SUPABASE_URL) && !SUPABASE_URL.includes("your-project-id") && SUPABASE_ANON_KEY.length > 20) {
   try {
-    client = createClient(supabaseUrl, supabaseAnonKey);
+    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     mode = true;
   } catch (e) {
     console.error("Supabase Client Init Failed:", e);
-    console.warn("Falling back to offline mode due to initialization error.");
     client = createMockClient();
     mode = false;
   }
 } else {
-  // If credentials are missing or invalid URL, default to offline
-  if (storedUrl && !isValidUrl(storedUrl)) {
-    console.error("Stored Supabase URL is invalid:", storedUrl);
-  }
+  // console.warn("Supabase Keys placeholder detected or Force Offline enabled. Using Offline Mock Mode.");
   client = createMockClient();
   mode = false;
 }
@@ -130,3 +144,8 @@ if (!mode) {
 
 export const supabase = client as any;
 export const isCloudMode = mode;
+export const offlineReason = FORCE_OFFLINE 
+  ? "Forced Offline" 
+  : (!ENV_SUPABASE_URL || !ENV_SUPABASE_KEY) 
+    ? "Missing Configuration" 
+    : "Connection Failed";
