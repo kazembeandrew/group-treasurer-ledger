@@ -57,7 +57,7 @@ const KPICard = React.memo(({ title, value, icon, color }: { title: string, valu
   </div>
 ));
 
-export const Dashboard: React.FC = () => {
+const Dashboard: React.FC = () => {
   const { transactions, loans, accounts, members, getLoanDetails, getAccountBalance, workingDate, addContribution, connectionError } = useStore();
   
   // AI Insights State
@@ -576,6 +576,8 @@ export const Dashboard: React.FC = () => {
     </div>
   );
 };
+
+export default Dashboard;
 
 // Utility Icons needed for Dashboard
 const Wallet: React.FC<any> = ({ ...props }) => (

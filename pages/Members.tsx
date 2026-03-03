@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { useStore } from '../store';
 import { Plus, Search, User, CreditCard, Banknote, TrendingUp, AlertCircle, Clock, Wallet, Loader2 } from 'lucide-react';
 
-export const Members: React.FC = () => {
+const Members: React.FC = () => {
   const { members, addMember, getMemberStats, isLoading } = useStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newName, setNewName] = useState('');
@@ -202,3 +202,5 @@ export const Members: React.FC = () => {
     </div>
   );
 };
+
+export default Members;
