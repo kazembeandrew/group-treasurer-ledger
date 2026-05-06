@@ -329,5 +329,3 @@ export const Reports: React.FC = () => {
     </div>
   );
 };
-
-export default Reports;

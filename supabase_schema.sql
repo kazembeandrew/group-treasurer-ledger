@@ -27,7 +27,8 @@ create table if not exists accounts (
 -- Loans Table
 create table if not exists loans (
   id uuid primary key default uuid_generate_v4(),
-  member_id uuid references members(id) not null,
+  member_id uuid references members(id), -- Nullable for non-member loans
+  borrower_name text, -- For non-member loans
   amount_given numeric not null,
   interest_rate numeric not null,
   interest_amount numeric,

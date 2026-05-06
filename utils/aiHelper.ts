@@ -221,10 +221,20 @@ export const askFinancialAssistant = async (
     }
 
   } catch (error: any) {
-    console.error("AI Error:", error);
+    console.error("AI Error details:", error);
+    
+    let errorMsg = error.message || "Unknown error";
+    
+    // Check for specific Gemini quota errors
+    if (errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED') || (error.status === 429)) {
+      errorMsg = "The AI Assistant's quota has been exceeded (Rate Limit). This usually happens with the free tier of Gemini. Please wait a minute or two and try again.";
+    } else if (errorMsg.includes('500') || errorMsg.includes('INTERNAL')) {
+      errorMsg = "The AI service is currently experiencing an internal error. Please try again in a few moments.";
+    }
+
     return {
       type: 'ANSWER',
-      text: `I'm having trouble processing that request: ${error.message || "Unknown error"}`
+      text: `I'm having trouble processing that request: ${errorMsg}`
     };
   }
 };

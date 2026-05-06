@@ -3,7 +3,6 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { v4 as uuidv4 } from 'uuid';
 import { Member, Account, Transaction, Loan, Notification, LoanStatus, AccountType, ChatMessage, ActionDraft, FundType, TransactionType } from './types';
 import { supabase, isCloudMode, offlineReason } from './supabaseClient';
-import { sanitizeString, validateMemberName, validateAmount, validateAccountName, validateAccountType, validateDate, validateNotes, validateInterestRate, validateFundType } from './utils/validation';
 
 interface StoreContextType {
   members: Member[];
@@ -23,7 +22,7 @@ interface StoreContextType {
   addAccount: (name: string, type: AccountType, memberId?: string) => Promise<string>;
   deleteAccount: (id: string) => Promise<string | null>;
   addContribution: (memberId: string, amount: number, accountId: string, date: string, notes: string, skipDuplicateCheck?: boolean) => Promise<string | null>;
-  addLoan: (memberId: string, amount: number, accountId: string, date: string, interestRate: number) => Promise<string | null>;
+  addLoan: (memberId: string | null, amount: number, accountId: string, date: string, interestRate: number, borrowerName?: string) => Promise<string | null>;
   addRepayment: (loanId: string, amount: number, accountId: string, date: string, notes: string, skipDuplicateCheck?: boolean) => Promise<string | null>;
   addExpense: (amount: number, accountId: string, date: string, notes: string, skipDuplicateCheck?: boolean) => Promise<string | null>;
   addTransfer: (fromAccountId: string, toAccountId: string, amount: number, fundType: 'PRINCIPAL' | 'INTEREST', date: string, notes: string, skipDuplicateCheck?: boolean) => Promise<string | null>;
@@ -161,7 +160,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const { data: loansData, error: lError } = await supabase.from('loans').select('*');
       if (lError) throw lError;
       if (loansData) {
-        setLoans(loansData.map((l: any) => ({ ...l, memberId: l.member_id })));
+        setLoans(loansData.map((l: any) => ({ ...l, memberId: l.member_id, borrowerName: l.borrower_name })));
       }
 
       // 4. Fetch Transactions
@@ -190,6 +189,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       
       if (errorMsg.toLowerCase().includes('invalid api key')) {
          setConnectionError('Auth Error');
+      } else if (errorMsg.toLowerCase().includes('refresh token')) {
+         console.warn("Supabase: Invalid/Expired session detected. Clearing session...");
+         supabase.auth.signOut(); // Clear local session
+         setConnectionError('Session Expired: Please refresh the page.');
       } else if (errorMsg.toLowerCase().includes('fetch')) {
          setConnectionError('Network Error: Failed to connect to database. Check your internet or Supabase configuration.');
       } else {
@@ -223,7 +226,21 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [fetchData]);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn("Supabase SignOut failed, clearing storage manually", e);
+    }
+    
+    // Clear all Supabase auth keys from localStorage to break invalid refresh token loops
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('sb-') || key.includes('supabase')) {
+        localStorage.removeItem(key);
+      }
+    });
+
+    setConnectionError(null);
+    window.location.reload(); // Force full reload to restart the client
   };
 
   const dismissNotification = (id: string) => {
@@ -296,22 +313,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // --- ACTIONS ---
 
   const addMember = async (name: string, startingCredit: number = 0) => {
-    const sanitizedName = sanitizeString(name);
-    const nameValidation = validateMemberName(sanitizedName);
-    if (!nameValidation.valid) {
-      throw new Error(nameValidation.error);
-    }
-    if (startingCredit > 0) {
-      const creditValidation = validateAmount(startingCredit);
-      if (!creditValidation.valid) {
-        throw new Error(creditValidation.error);
-      }
-    }
     const id = uuidv4();
-    const newMember = { id, name: sanitizedName, active: true, advance_credit: startingCredit };
+    const newMember = { id, name, active: true, advance_credit: startingCredit };
     setMembers(prev => [...prev, newMember]);
     await supabase.from('members').insert(newMember);
-    logAudit('CREATED', 'members', id, `Added member ${sanitizedName}`);
+    logAudit('CREATED', 'members', id, `Added member ${name}`);
     return id;
   };
 
@@ -322,20 +328,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const addAccount = async (name: string, type: AccountType, memberId?: string) => {
-    const sanitizedName = sanitizeString(name);
-    const nameValidation = validateAccountName(sanitizedName);
-    if (!nameValidation.valid) {
-      throw new Error(nameValidation.error);
-    }
-    const typeValidation = validateAccountType(type);
-    if (!typeValidation.valid) {
-      throw new Error(typeValidation.error);
-    }
     const id = uuidv4();
-    const newAccount = { id, account_name: sanitizedName, type, active: true, member_id: memberId || null };
+    const newAccount = { id, account_name: name, type, active: true, member_id: memberId || null };
     setAccounts(prev => [...prev, { ...newAccount, memberId }]);
     await supabase.from('accounts').insert(newAccount);
-    logAudit('CREATED', 'accounts', id, `Created account ${sanitizedName}`);
+    logAudit('CREATED', 'accounts', id, `Created account ${name}`);
     return id;
   };
 
@@ -350,19 +347,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const addContribution = async (memberId: string, amount: number, accountId: string, date: string, notes: string, skipDuplicateCheck = false): Promise<string | null> => {
-    const amountValidation = validateAmount(amount);
-    if (!amountValidation.valid) {
-      return `Validation Failed: ${amountValidation.error}`;
+    // Validate date
+    if (!date || isNaN(new Date(date).getTime())) {
+        return "Validation Failed: Invalid date provided.";
     }
-    const dateValidation = validateDate(date);
-    if (!dateValidation.valid) {
-      return `Validation Failed: ${dateValidation.error}`;
-    }
-    const notesValidation = validateNotes(notes);
-    if (!notesValidation.valid) {
-      return `Validation Failed: ${notesValidation.error}`;
-    }
-    const sanitizedNotes = sanitizeString(notes);
 
     // Check for missed previous day payment
     const currentDate = new Date(date);
@@ -394,7 +382,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
          const transDB = {
             id: tId, date: prevDate, member_id: memberId, account_id: accountId,
             fund_type: 'PRINCIPAL', transaction_type: 'CONTRIBUTION', amount: amountForYesterday,
-            notes: `${sanitizedNotes} (Catch-up for ${prevDate})`,
+            notes: `${notes} (Catch-up for ${prevDate})`,
             created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
             created_by: 'Treasurer'
          };
@@ -430,7 +418,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       newTransactions.push({
         id: tId, date, member_id: memberId, account_id: accountId,
         fund_type: 'PRINCIPAL', transaction_type: 'CONTRIBUTION', amount: share,
-        notes: sanitizedNotes || 'Daily Share',
+        notes: notes || 'Daily Share',
         created_at: new Date().toISOString(), 
         last_modified: new Date().toISOString(),
         created_by: 'Treasurer'
@@ -508,26 +496,26 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return null;
   };
 
-  const addLoan = async (memberId: string, amount: number, accountId: string, date: string, interestRate: number) => {
+  const addLoan = async (memberId: string | null, amount: number, accountId: string, date: string, interestRate: number, borrowerName?: string) => {
     // Validate date
     if (!date || isNaN(new Date(date).getTime())) {
         return "Validation Failed: Invalid date provided.";
     }
 
     const accountBalance = getAccountBalance(accountId);
-    // Modified: Check TOTAL balance instead of just Principal.
-    // This allows borrowing from Interest funds if Principal is insufficient.
     if (accountBalance.total < amount) {
        return `Validation Failed: Insufficient Funds in Account. Available Total: ${accountBalance.total}, Needed: ${amount}.`;
     }
 
-    if (isDuplicateTransaction(memberId, accountId, amount * -1, 'LOAN_GIVEN', date)) {
+    if (isDuplicateTransaction(memberId || undefined, accountId, amount * -1, 'LOAN_GIVEN', date)) {
         return "Duplicate loan transaction detected.";
     }
 
-    const memberLoans = loans.filter(l => l.memberId === memberId);
-    const hasActiveLoan = memberLoans.some(l => getLoanDetails(l).status !== 'PAID');
-    if (hasActiveLoan) return 'Member has outstanding loan.';
+    if (memberId) {
+      const memberLoans = loans.filter(l => l.memberId === memberId);
+      const hasActiveLoan = memberLoans.some(l => getLoanDetails(l).status !== 'PAID');
+      if (hasActiveLoan) return 'Member has outstanding loan.';
+    }
 
     const loanId = uuidv4();
     const dueDate = new Date(date);
@@ -535,9 +523,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const interestVal = amount * (interestRate / 100);
 
     const loanDB = {
-      id: loanId, member_id: memberId, amount_given: amount,
-      interest_rate: interestRate, interest_amount: interestVal,
-      date_given: date, due_date: dueDate.toISOString(),
+      id: loanId, 
+      member_id: memberId, 
+      borrower_name: borrowerName || null,
+      amount_given: amount,
+      interest_rate: interestRate, 
+      interest_amount: interestVal,
+      date_given: date, 
+      due_date: dueDate.toISOString().split('T')[0],
       created_at: new Date().toISOString()
     };
 
@@ -545,18 +538,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const transDB = {
       id: transId, date, member_id: memberId, account_id: accountId,
       fund_type: 'PRINCIPAL', transaction_type: 'LOAN_GIVEN',
-      amount: -amount, notes: `Loan given`,
+      amount: -amount, notes: `Loan given to ${borrowerName || members.find(m => m.id === memberId)?.name || 'Unknown'}`,
       created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
       created_by: 'Treasurer',
       related_loan_id: loanId
     };
 
-    setLoans(prev => [...prev, { ...loanDB, memberId }]);
-    setTransactions(prev => [...prev, { ...transDB, memberId, accountId, related_loan_id: loanId } as Transaction]);
+    setLoans(prev => [...prev, { ...loanDB, memberId: memberId || undefined, borrowerName: borrowerName || undefined } as Loan]);
+    setTransactions(prev => [...prev, { ...transDB, memberId: memberId || undefined, accountId, related_loan_id: loanId } as Transaction]);
 
-    await supabase.from('loans').insert(loanDB);
-    await supabase.from('transactions').insert(transDB);
-    logAudit('CREATED', 'loans', loanId, `Loan given to member ${memberId}`);
+    try {
+      await supabase.from('loans').insert(loanDB);
+      await supabase.from('transactions').insert(transDB);
+      logAudit('CREATED', 'loans', loanId, `Loan given to ${borrowerName || 'member'}`);
+    } catch (e: any) {
+      console.error("Supabase Loan Error:", e);
+      if (isCloudMode && e.message?.includes('borrower_name" does not exist')) {
+          addNotification("Database needs update for Non-Member loans.", "error");
+      }
+    }
     return null;
   };
 
@@ -582,10 +582,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
      if (amount <= interestRemaining) { iComp = amount; }
      else { iComp = interestRemaining; pComp = amount - interestRemaining; }
 
+     const resolvedMemberId = loan.memberId || null;
+
      const newTransDB = [];
      if (iComp > 0) {
         newTransDB.push({
-            id: uuidv4(), date, member_id: loan.memberId, account_id: accountId,
+            id: uuidv4(), date, member_id: resolvedMemberId, account_id: accountId,
             fund_type: 'INTEREST', transaction_type: 'LOAN_REPAYMENT', amount: iComp,
             related_loan_id: loanId, notes: notes ? `${notes} (Int)` : 'Repayment (Int)',
             created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
@@ -594,7 +596,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
      }
      if (pComp > 0) {
         newTransDB.push({
-            id: uuidv4(), date, member_id: loan.memberId, account_id: accountId,
+            id: uuidv4(), date, member_id: resolvedMemberId, account_id: accountId,
             fund_type: 'PRINCIPAL', transaction_type: 'LOAN_REPAYMENT', amount: pComp,
             related_loan_id: loanId, notes: notes ? `${notes} (Prin)` : 'Repayment (Prin)',
             created_at: new Date().toISOString(), last_modified: new Date().toISOString(),

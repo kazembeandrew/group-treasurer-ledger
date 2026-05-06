@@ -181,5 +181,3 @@ export const Settings: React.FC = () => {
     </div>
   );
 };
-
-export default Settings;

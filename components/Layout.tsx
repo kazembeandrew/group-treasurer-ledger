@@ -169,8 +169,20 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 : 'bg-slate-100 text-slate-500'
           }`}>
              {connectionError ? <AlertTriangle size={12} /> : isCloudMode ? <Cloud size={12} /> : <CloudOff size={12} />}
-             {connectionError ? 'AUTH ERROR' : isCloudMode ? 'SYNC ACTIVE' : offlineReason.toUpperCase()}
+             {connectionError ? (connectionError.includes('Session') ? 'SESSION ERROR' : 'AUTH ERROR') : isCloudMode ? 'SYNC ACTIVE' : offlineReason.toUpperCase()}
           </div>
+
+          {connectionError && (
+            <div className="mb-6 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-xs text-red-800 font-medium mb-2">{connectionError}</p>
+              <button 
+                onClick={() => signOut()}
+                className="text-[10px] font-bold bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700 uppercase"
+              >
+                Reset Session
+              </button>
+            </div>
+          )}
 
           <nav className="space-y-1">
             <NavItem to="/" icon={<LayoutDashboard size={20} />} label="Dashboard" onClick={() => setIsSidebarOpen(false)} />

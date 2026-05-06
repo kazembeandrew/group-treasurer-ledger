@@ -35,7 +35,8 @@ export interface Transaction {
 
 export interface Loan {
   id: string;
-  memberId: string;
+  memberId?: string;
+  borrowerName?: string; // For non-member loans
   amount_given: number;
   interest_rate: number;
   interest_amount?: number; // Explicitly stored interest amount

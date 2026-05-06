@@ -25,39 +25,19 @@ import { Link } from 'react-router-dom';
 import { askFinancialAssistant } from '../utils/aiHelper';
 import { Member } from '../types';
 
-const getColorClasses = (color: string) => {
-  const base = 'p-3 rounded-lg bg-opacity-10';
-  switch (color) {
-    case 'emerald':
-      return `${base} bg-emerald-500 text-emerald-600`;
-    case 'blue':
-      return `${base} bg-blue-500 text-blue-600`;
-    case 'orange':
-      return `${base} bg-orange-500 text-orange-600`;
-    case 'purple':
-      return `${base} bg-purple-500 text-purple-600`;
-    case 'red':
-      return `${base} bg-red-500 text-red-600`;
-    case 'green':
-      return `${base} bg-green-500 text-green-600`;
-    default:
-      return `${base} bg-gray-500 text-gray-600`;
-  }
-};
-
-const KPICard = React.memo(({ title, value, icon, color }: { title: string, value: string, icon: React.ReactNode, color: string }) => (
+const KPICard: React.FC<{ title: string, value: string, icon: React.ReactNode, color: string }> = ({ title, value, icon, color }) => (
   <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
     <div className="flex items-center justify-between mb-4">
-      <div className={getColorClasses(color)}>
+      <div className={`p-3 rounded-lg ${color} bg-opacity-10 text-${color.split('-')[1]}-600`}>
         {icon}
       </div>
     </div>
     <p className="text-sm font-medium text-slate-500 mb-1">{title}</p>
     <h3 className="text-2xl font-bold text-slate-900">{value}</h3>
   </div>
-));
+);
 
-const Dashboard: React.FC = () => {
+export const Dashboard: React.FC = () => {
   const { transactions, loans, accounts, members, getLoanDetails, getAccountBalance, workingDate, addContribution, connectionError } = useStore();
   
   // AI Insights State
@@ -275,7 +255,6 @@ const Dashboard: React.FC = () => {
               onClick={generateInsight} 
               className="text-purple-400 hover:text-purple-700 transition-colors"
               title="Refresh Analysis"
-              aria-label="Refresh AI Analysis"
             >
               <RefreshCw size={16} className={isAiLoading ? "animate-spin" : ""} />
             </button>
@@ -468,14 +447,14 @@ const Dashboard: React.FC = () => {
 
       {/* Daily Contribution Quick Modal */}
       {showDailyModal && unpaidMembersData.length > 0 && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4" role="dialog" aria-labelledby="modal-title">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
           <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl animate-in zoom-in-95 overflow-hidden flex flex-col max-h-[85vh]">
              <div className="p-4 bg-gradient-to-r from-blue-600 to-indigo-600 flex justify-between items-center text-white shrink-0">
                <div className="flex items-center gap-2">
                  <Check className="text-emerald-300" />
-                 <h2 id="modal-title" className="text-lg font-bold">Outstanding Contributions</h2>
+                 <h2 className="text-lg font-bold">Outstanding Contributions</h2>
                </div>
-               <button onClick={() => setShowDailyModal(false)} className="hover:bg-white/20 p-1 rounded-full transition-colors" aria-label="Close modal">
+               <button onClick={() => setShowDailyModal(false)} className="hover:bg-white/20 p-1 rounded-full transition-colors">
                  <X size={20} />
                </button>
              </div>
@@ -517,7 +496,6 @@ const Dashboard: React.FC = () => {
                        <button 
                          onClick={() => handleCustomSubmit(member.id)}
                          className="bg-blue-600 text-white p-1 rounded hover:bg-blue-700"
-                         aria-label={`Submit contribution for ${member.name}`}
                        >
                          <Check size={16} />
                        </button>
@@ -527,7 +505,6 @@ const Dashboard: React.FC = () => {
                            setCustomAmountValue('');
                          }}
                          className="bg-slate-200 text-slate-600 p-1 rounded hover:bg-slate-300"
-                         aria-label={`Cancel contribution for ${member.name}`}
                        >
                          <X size={16} />
                        </button>
@@ -576,8 +553,6 @@ const Dashboard: React.FC = () => {
     </div>
   );
 };
-
-export default Dashboard;
 
 // Utility Icons needed for Dashboard
 const Wallet: React.FC<any> = ({ ...props }) => (

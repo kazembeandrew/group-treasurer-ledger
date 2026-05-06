@@ -11,7 +11,7 @@ const ENV_SUPABASE_URL = (import.meta as any).env.VITE_SUPABASE_URL;
 const ENV_SUPABASE_KEY = (import.meta as any).env.VITE_SUPABASE_ANON_KEY;
 
 // Hardcoded fallbacks (for local/demo purposes if env vars are missing)
-const FALLBACK_URL = "https://gntyaxyjlppapkfonkpj.supabase.co";
+const FALLBACK_URL = "https://gntyaxyjlppapkfonkpj.supabase.co"; 
 const FALLBACK_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdudHlheHlqbHBwYXBrZm9ua3BqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMDMyODAsImV4cCI6MjA4NjY3OTI4MH0.tNdPj5lN6WfDeMpgvM5D5n4NuIzhT61DrKBDTmUXdys";
 
 const SUPABASE_URL = ENV_SUPABASE_URL || FALLBACK_URL;
@@ -25,7 +25,7 @@ const createMockClient = () => {
   const getTable = (table: string) => {
     try {
       const data = localStorage.getItem(`wealthshare_${table}`);
-      return data ? JSON.parse(atob(data)) : [];
+      return data ? JSON.parse(data) : [];
     } catch (e) {
       return [];
     }
@@ -33,7 +33,7 @@ const createMockClient = () => {
   
   const setTable = (table: string, data: any[]) => {
     try {
-      localStorage.setItem(`wealthshare_${table}`, btoa(JSON.stringify(data)));
+      localStorage.setItem(`wealthshare_${table}`, JSON.stringify(data));
     } catch (e) {
       console.error("LocalStorage write failed", e);
     }
@@ -123,7 +123,24 @@ let mode = false;
 // We check if the URL is valid and contains the real supabase URL pattern
 if (!FORCE_OFFLINE && isValidUrl(SUPABASE_URL) && !SUPABASE_URL.includes("your-project-id") && SUPABASE_ANON_KEY.length > 20) {
   try {
-    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
+      }
+    });
+    
+    // Auth diagnostic listener
+    client.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED') {
+        console.info("Supabase: Token refreshed successfully");
+      }
+      if (event === 'SIGNED_OUT') {
+        console.warn("Supabase: User signed out or session invalidated");
+      }
+    });
+
     mode = true;
   } catch (e) {
     console.error("Supabase Client Init Failed:", e);

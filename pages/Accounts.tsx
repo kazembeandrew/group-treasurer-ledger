@@ -232,5 +232,3 @@ export const Accounts: React.FC = () => {
     </div>
   );
 };
-
-export default Accounts;

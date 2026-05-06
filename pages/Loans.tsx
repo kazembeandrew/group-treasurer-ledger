@@ -39,6 +39,8 @@ export const Loans: React.FC = () => {
   const [showArchived, setShowArchived] = useState(false); // Toggle for Paid loans
   const [formData, setFormData] = useState({
     memberId: '',
+    borrowerName: '',
+    isNonMember: false,
     accountId: '',
     amount: '',
     interestRate: '10',
@@ -72,11 +74,12 @@ export const Loans: React.FC = () => {
     
     if (modalType === 'NEW_LOAN') {
       const result = await addLoan(
-        formData.memberId, 
+        formData.isNonMember ? null : formData.memberId, 
         amt, 
         formData.accountId, 
         formData.date, 
-        parseFloat(formData.interestRate)
+        parseFloat(formData.interestRate),
+        formData.isNonMember ? formData.borrowerName : undefined
       );
       if (result) setError(result);
       else closeModal();
@@ -94,6 +97,8 @@ export const Loans: React.FC = () => {
     setDeleteConfirmId(null);
     setFormData({
       memberId: '',
+      borrowerName: '',
+      isNonMember: false,
       accountId: '',
       amount: '',
       interestRate: '10',
@@ -359,6 +364,7 @@ export const Loans: React.FC = () => {
     .map(l => ({
       ...l,
       member: members.find(m => m.id === l.memberId),
+      displayName: l.borrowerName || members.find(m => m.id === l.memberId)?.name || 'Non-Member',
       details: getLoanDetails(l),
       repayments: groupRepayments(transactions
         .filter(t => 
@@ -416,12 +422,13 @@ export const Loans: React.FC = () => {
               <div className="flex-1 space-y-2">
                 <div className="flex items-center space-x-3">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${loan.details.status === 'PAID' ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-600'}`}>
-                    {loan.member?.name.charAt(0)}
+                    {loan.displayName.charAt(0)}
                   </div>
                   <div>
-                    <h3 className="font-bold text-slate-900">{loan.member?.name}</h3>
+                    <h3 className="font-bold text-slate-900">{loan.displayName}</h3>
                     <div className="flex items-center text-xs text-slate-500 space-x-3">
-                      <span className="flex items-center"><Calendar size={12} className="mr-1" /> {new Date(loan.date_given).toLocaleDateString()})</span>
+                      <span className="flex items-center"><Calendar size={12} className="mr-1" /> {new Date(loan.date_given).toLocaleDateString()}</span>
+                      {loan.borrowerName && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">External</span>}
                       <span className="flex items-center"><Clock size={12} className="mr-1" /> Due: {new Date(loan.due_date).toLocaleDateString()}</span>
                     </div>
                   </div>
@@ -519,7 +526,7 @@ export const Loans: React.FC = () => {
                             +{rp.amount.toLocaleString()} MK
                           </span>
                           <button 
-                            onClick={() => initiateReceipt(rp, loan.member?.name || 'Member', acc?.account_name || 'Cash', loan.id, loan.details.balance)}
+                            onClick={() => initiateReceipt(rp, loan.displayName || 'Borrower', acc?.account_name || 'Cash', loan.id, loan.details.balance)}
                             className="text-slate-300 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-all"
                             title="Generate Receipt"
                           >
@@ -559,21 +566,58 @@ export const Loans: React.FC = () => {
             <form onSubmit={handleAction} className="space-y-4">
               {modalType === 'NEW_LOAN' ? (
                 <>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Member</label>
-                    <select 
-                      required 
-                      className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
-                      value={formData.memberId}
-                      onChange={(e) => setFormData({...formData, memberId: e.target.value})}
-                      disabled={isSubmitting}
-                    >
-                      <option value="">Select Member</option>
-                      {members.filter(m => m.active).map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
+                  <div className="flex items-center space-x-4 mb-2 p-2 bg-slate-50 rounded-lg">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Borrower Type:</span>
+                    <label className="flex items-center cursor-pointer">
+                      <input 
+                        type="radio" 
+                        className="mr-2" 
+                        checked={!formData.isNonMember} 
+                        onChange={() => setFormData({...formData, isNonMember: false})} 
+                      />
+                      <span className="text-sm">Member</span>
+                    </label>
+                    <label className="flex items-center cursor-pointer">
+                      <input 
+                        type="radio" 
+                        className="mr-2" 
+                        checked={formData.isNonMember} 
+                        onChange={() => setFormData({...formData, isNonMember: true})} 
+                      />
+                      <span className="text-sm">Non-Member</span>
+                    </label>
                   </div>
+
+                  {!formData.isNonMember ? (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Select Member</label>
+                      <select 
+                        required 
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
+                        value={formData.memberId}
+                        onChange={(e) => setFormData({...formData, memberId: e.target.value})}
+                        disabled={isSubmitting}
+                      >
+                        <option value="">Select Member</option>
+                        {members.filter(m => m.active).map(m => (
+                          <option key={m.id} value={m.id}>{m.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Borrower Name</label>
+                      <input 
+                        type="text" 
+                        required 
+                        placeholder="Enter full name"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900"
+                        value={formData.borrowerName}
+                        onChange={(e) => setFormData({...formData, borrowerName: e.target.value})}
+                        disabled={isSubmitting}
+                      />
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Amount (MK)</label>
@@ -600,7 +644,7 @@ export const Loans: React.FC = () => {
               ) : (
                 <>
                   <div className="p-3 bg-blue-50 text-blue-800 text-sm rounded-lg mb-4">
-                    Repayment for <strong>{allProcessedLoans.find(l => l.id === selectedLoanId)?.member?.name}</strong>'s loan.
+                    Repayment for <strong>{allProcessedLoans.find(l => l.id === selectedLoanId)?.displayName}</strong>'s loan.
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Repayment Amount (MK)</label>
@@ -732,5 +776,3 @@ export const Loans: React.FC = () => {
     </div>
   );
 };
-
-export default Loans;
