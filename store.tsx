@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { v4 as uuidv4 } from 'uuid';
 import { Member, Account, Transaction, Loan, Notification, LoanStatus, AccountType, ChatMessage, ActionDraft, FundType, TransactionType } from './types';
 import { supabase, isCloudMode, offlineReason } from './supabaseClient';
+import { triggerAutoDriveBackup } from './utils/googleDrive';
 
 interface StoreContextType {
   members: Member[];
@@ -52,6 +53,7 @@ interface StoreContextType {
     total: number;
   };
   dismissNotification: (id: string) => void;
+  addNotification: (message: string, type?: Notification['type']) => void;
   exportData: () => string;
   importData: (jsonString: string) => Promise<boolean>;
   resetData: () => Promise<void>;
@@ -224,6 +226,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // --- GOOGLE DRIVE AUTO BACKUP EFFECT ---
+  useEffect(() => {
+    if (isLoading) return;
+    const timer = setTimeout(() => {
+      triggerAutoDriveBackup(exportData);
+    }, 10000);
+    return () => clearTimeout(timer);
+  }, [transactions.length, members.length, loans.length, isLoading]);
 
   const signOut = async () => {
     try {
@@ -768,6 +779,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   
   const logBackup = () => {
       localStorage.setItem('wealthshare_last_backup', new Date().toISOString());
+      triggerAutoDriveBackup(exportData);
   };
 
   const addChatMessage = async (sender: 'user'|'ai', text?: string, actions?: ActionDraft[]) => {
@@ -793,7 +805,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setWorkingDate, addMember, updateMember, addAccount, deleteAccount,
       addContribution, addLoan, addRepayment, addExpense, addTransfer, addOpeningBalance, deleteTransaction, deleteLoan,
       addChatMessage, updateChatMessage, clearChatHistory,
-      getLoanDetails, getMemberStats, getAccountBalance, dismissNotification,
+      getLoanDetails, getMemberStats, getAccountBalance, dismissNotification, addNotification,
       exportData, importData, resetData, checkLastBackup, logBackup, signOut
     }}>
       {children}
