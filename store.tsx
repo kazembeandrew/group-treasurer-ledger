@@ -343,23 +343,35 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const id = uuidv4();
     const newMember = { id, name, active: true, advance_credit: startingCredit };
     setMembers(prev => [...prev, newMember]);
-    await supabase.from('members').insert(newMember);
-    logAudit('CREATED', 'members', id, `Added member ${name}`);
+    try {
+      await supabase.from('members').insert(newMember);
+      logAudit('CREATED', 'members', id, `Added member ${name}`);
+    } catch (e) {
+      console.warn("Supabase member insert error:", e);
+    }
     return id;
   };
 
   const updateMember = async (id: string, updates: Partial<Member>) => {
     setMembers(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
-    await supabase.from('members').update(updates).eq('id', id);
-    logAudit('UPDATED', 'members', id, `Updated member fields: ${Object.keys(updates).join(', ')}`);
+    try {
+      await supabase.from('members').update(updates).eq('id', id);
+      logAudit('UPDATED', 'members', id, `Updated member fields: ${Object.keys(updates).join(', ')}`);
+    } catch (e) {
+      console.warn("Supabase member update error:", e);
+    }
   };
 
   const addAccount = async (name: string, type: AccountType, memberId?: string) => {
     const id = uuidv4();
     const newAccount = { id, account_name: name, type, active: true, member_id: memberId || null };
     setAccounts(prev => [...prev, { ...newAccount, memberId }]);
-    await supabase.from('accounts').insert(newAccount);
-    logAudit('CREATED', 'accounts', id, `Created account ${name}`);
+    try {
+      await supabase.from('accounts').insert(newAccount);
+      logAudit('CREATED', 'accounts', id, `Created account ${name}`);
+    } catch (e) {
+      console.warn("Supabase account insert error:", e);
+    }
     return id;
   };
 
@@ -368,8 +380,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (Math.abs(bal.total) > 0.01) return `Cannot delete. Balance is ${bal.total}`;
     
     setAccounts(prev => prev.filter(a => a.id !== id));
-    await supabase.from('accounts').delete().eq('id', id);
-    logAudit('DELETED', 'accounts', id, 'Deleted account');
+    try {
+      await supabase.from('accounts').delete().eq('id', id);
+      logAudit('DELETED', 'accounts', id, 'Deleted account');
+    } catch (e) {
+      console.warn("Supabase account delete error:", e);
+    }
     return null;
   };
 
