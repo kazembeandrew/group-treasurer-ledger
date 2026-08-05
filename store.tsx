@@ -167,43 +167,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       // 4. Fetch Transactions
-      const { data: transData } = await supabase.from('transactions').select('*');
+      const { data: transData, error: tError } = await supabase.from('transactions').select('*');
+      if (tError) throw tError;
       
-      let localTrans: any[] = [];
-      try {
-        const stored = localStorage.getItem('wealthshare_transactions');
-        if (stored) localTrans = JSON.parse(stored);
-      } catch (e) {}
-
-      const map = new Map();
       if (transData) {
-        transData.forEach((t: any) => {
-          map.set(t.id, {
-            ...t,
-            memberId: t.member_id || t.memberId,
-            accountId: t.account_id || t.accountId,
-            related_loan_id: t.related_loan_id
-          });
-        });
-      }
-      localTrans.forEach((t: any) => {
-        if (!map.has(t.id)) {
-          map.set(t.id, {
-            ...t,
-            memberId: t.member_id || t.memberId,
-            accountId: t.account_id || t.accountId,
-            related_loan_id: t.related_loan_id
-          });
-        }
-      });
-
-      const mergedTrans = Array.from(map.values());
-      if (mergedTrans.length > 0) {
-        setTransactions(mergedTrans);
-        transactionsRef.current = mergedTrans;
+        const formattedTrans = transData.map((t: any) => ({
+          ...t,
+          memberId: t.member_id || t.memberId,
+          accountId: t.account_id || t.accountId,
+          related_loan_id: t.related_loan_id
+        }));
+        setTransactions(formattedTrans);
+        transactionsRef.current = formattedTrans;
         try {
-          localStorage.setItem('wealthshare_transactions', JSON.stringify(mergedTrans));
+          localStorage.setItem('wealthshare_transactions', JSON.stringify(formattedTrans));
         } catch (e) {}
+      } else {
+        let localTrans: any[] = [];
+        try {
+          const stored = localStorage.getItem('wealthshare_transactions');
+          if (stored) localTrans = JSON.parse(stored);
+        } catch (e) {}
+        setTransactions(localTrans);
+        transactionsRef.current = localTrans;
       }
 
       // 5. Fetch Chat
@@ -232,11 +218,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []);
 
-  // --- REALTIME SUBSCRIPTION ---
+  // --- REALTIME SUBSCRIPTION (Listen to all core table updates) ---
   useEffect(() => {
     if (!isCloudMode) return;
     const channel = supabase.channel('schema-db-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'loans' }, () => fetchData())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [fetchData]);
@@ -687,7 +676,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           await supabase.from('loans').delete().eq('id', transaction.related_loan_id);
       }
 
-      setTransactions(prev => prev.filter(t => t.id !== id));
+      const nextTrans = transactionsRef.current.filter(t => t.id !== id);
+      transactionsRef.current = nextTrans;
+      setTransactions(nextTrans);
+      try {
+        localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTrans));
+      } catch (e) {}
+
       await supabase.from('transactions').delete().eq('id', id);
       logAudit('DELETED', 'transactions', id, 'Deleted Transaction');
   };
