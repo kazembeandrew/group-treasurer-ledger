@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Member, Account, Transaction, Loan, Notification, LoanStatus, AccountType, ChatMessage, ActionDraft, FundType, TransactionType } from './types';
 import { supabase, isCloudMode, offlineReason } from './supabaseClient';
 import { triggerAutoDriveBackup } from './utils/googleDrive';
+import { getUTCOffsetDate } from './utils/dateUtils';
 
 interface StoreContextType {
   members: Member[];
@@ -166,17 +167,43 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       // 4. Fetch Transactions
-      const { data: transData, error: tError } = await supabase.from('transactions').select('*');
-      if (tError) throw tError;
+      const { data: transData } = await supabase.from('transactions').select('*');
+      
+      let localTrans: any[] = [];
+      try {
+        const stored = localStorage.getItem('wealthshare_transactions');
+        if (stored) localTrans = JSON.parse(stored);
+      } catch (e) {}
+
+      const map = new Map();
       if (transData) {
-        const mappedTrans = transData.map((t: any) => ({
-          ...t,
-          memberId: t.member_id,
-          accountId: t.account_id,
-          related_loan_id: t.related_loan_id 
-        }));
-        setTransactions(mappedTrans);
-        transactionsRef.current = mappedTrans;
+        transData.forEach((t: any) => {
+          map.set(t.id, {
+            ...t,
+            memberId: t.member_id || t.memberId,
+            accountId: t.account_id || t.accountId,
+            related_loan_id: t.related_loan_id
+          });
+        });
+      }
+      localTrans.forEach((t: any) => {
+        if (!map.has(t.id)) {
+          map.set(t.id, {
+            ...t,
+            memberId: t.member_id || t.memberId,
+            accountId: t.account_id || t.accountId,
+            related_loan_id: t.related_loan_id
+          });
+        }
+      });
+
+      const mergedTrans = Array.from(map.values());
+      if (mergedTrans.length > 0) {
+        setTransactions(mergedTrans);
+        transactionsRef.current = mergedTrans;
+        try {
+          localStorage.setItem('wealthshare_transactions', JSON.stringify(mergedTrans));
+        } catch (e) {}
       }
 
       // 5. Fetch Chat
@@ -363,145 +390,83 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return "Validation Failed: Invalid date provided.";
     }
 
-    // Check for missed previous day payment
-    const currentDate = new Date(date);
-    const prevDateObj = new Date(currentDate);
-    prevDateObj.setDate(currentDate.getDate() - 1);
-    const prevDate = prevDateObj.toISOString().split('T')[0];
-
-    const hasPrevDayContribution = transactionsRef.current.some(t => 
-      t.memberId === memberId && 
-      t.date === prevDate && 
-      t.transaction_type === 'CONTRIBUTION'
-    );
-
-    let amountForToday = amount;
-    let amountForYesterday = 0;
-
-    // If missed yesterday and paying enough to cover both (assuming 1000 daily standard)
-    if (!hasPrevDayContribution && amount >= 2000) {
-       amountForYesterday = 1000;
-       amountForToday = amount - 1000;
-    }
-
-    // --- PROCESS YESTERDAY'S CATCH-UP ---
-    if (amountForYesterday > 0) {
-       if (!skipDuplicateCheck && isDuplicateTransaction(memberId, accountId, amountForYesterday, 'CONTRIBUTION', prevDate)) {
-         console.warn("Duplicate catch-up transaction detected");
-       } else {
-         const tId = uuidv4();
-         const transDB = {
-            id: tId, date: prevDate, member_id: memberId, account_id: accountId,
-            fund_type: 'PRINCIPAL', transaction_type: 'CONTRIBUTION', amount: amountForYesterday,
-            notes: `${notes} (Catch-up for ${prevDate})`,
-            created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
-            created_by: 'Treasurer'
-         };
-         // Insert immediately to state and DB
-         setTransactions(prev => [...prev, { ...transDB, memberId, accountId } as Transaction]);
-         await supabase.from('transactions').insert(transDB);
-       }
-    }
-
-    // --- PROCESS TODAY'S CONTRIBUTION ---
-    if (amountForToday <= 0) return null; // All went to yesterday?
-
-    if (!skipDuplicateCheck && isDuplicateTransaction(memberId, accountId, amountForToday, 'CONTRIBUTION', date)) {
+    if (!skipDuplicateCheck && isDuplicateTransaction(memberId, accountId, amount, 'CONTRIBUTION', date)) {
       return "Duplicate transaction detected! Please wait a moment or check records.";
     }
 
     const member = members.find(m => m.id === memberId);
     if (!member) return 'Member not found';
 
-    const existingContributionAmountOnDate = transactionsRef.current
-      .filter(t => t.memberId === memberId && t.date === date && t.transaction_type === 'CONTRIBUTION')
-      .reduce((sum, t) => sum + t.amount, 0);
-
-    const remainingShareCapacity = Math.max(0, 1000 - existingContributionAmountOnDate);
-    let totalPool = amountForToday + member.advance_credit;
-    const share = Math.min(remainingShareCapacity, totalPool);
-    let extra = totalPool - share;
-
+    const DAILY_RATE = 1000;
+    let totalPool = amount + (member.advance_credit || 0);
+    let remainingPool = totalPool;
     const newTransactions: any[] = [];
-    
-    if (share > 0) {
-      const tId = uuidv4();
-      newTransactions.push({
-        id: tId, date, member_id: memberId, account_id: accountId,
-        fund_type: 'PRINCIPAL', transaction_type: 'CONTRIBUTION', amount: share,
-        notes: notes || 'Daily Share',
-        created_at: new Date().toISOString(), 
-        last_modified: new Date().toISOString(),
-        created_by: 'Treasurer'
-      });
-    }
 
-    let remainingExtra = extra;
-    let updatedAdvanceCredit = 0;
+    // Allocate pool starting from `date` (0 days ago) backwards up to 365 days
+    for (let i = 0; i < 365; i++) {
+      if (remainingPool <= 0) break;
 
-    if (remainingExtra > 0) {
-       const getDetailsWithRef = (l: Loan) => {
-        const interestAmount = l.interest_amount ?? (l.amount_given * (l.interest_rate / 100));
-        const totalDue = l.amount_given + interestAmount;
-        const amountPaid = transactionsRef.current
-          .filter(t => t.related_loan_id === l.id && t.transaction_type === 'LOAN_REPAYMENT' && t.date <= workingDate)
-          .reduce((sum, t) => sum + t.amount, 0);
-        return { balance: totalDue - amountPaid, interestAmount };
-      };
+      const checkDate = getUTCOffsetDate(date, i);
+      if (!checkDate) break;
 
-      const unpaidLoans = loans
-        .filter(l => l.memberId === memberId)
-        .map(l => ({ ...l, ...getDetailsWithRef(l) }))
-        .filter(l => l.balance > 0)
-        .sort((a, b) => new Date(a.date_given).getTime() - new Date(b.date_given).getTime());
-      
-      for (const loan of unpaidLoans) {
-        if (remainingExtra <= 0) break;
-        const repaymentAmount = Math.min(remainingExtra, loan.balance);
-        if (repaymentAmount > 0) {
-           const interestAlreadyPaid = transactionsRef.current
-            .filter(t => t.related_loan_id === loan.id && t.transaction_type === 'LOAN_REPAYMENT' && t.fund_type === 'INTEREST')
-            .reduce((sum, t) => sum + t.amount, 0);
-           const interestRemaining = Math.max(0, loan.interestAmount - interestAlreadyPaid);
-           
-           let iComp = 0; let pComp = 0;
-           if (repaymentAmount <= interestRemaining) { iComp = repaymentAmount; } 
-           else { iComp = interestRemaining; pComp = repaymentAmount - interestRemaining; }
+      const existingPaid = transactionsRef.current
+        .filter(t => t.memberId === memberId && t.date === checkDate && t.transaction_type === 'CONTRIBUTION')
+        .reduce((sum, t) => sum + t.amount, 0);
 
-           if (iComp > 0) {
-              newTransactions.push({
-                id: uuidv4(), date, member_id: memberId, account_id: accountId,
-                fund_type: 'INTEREST', transaction_type: 'LOAN_REPAYMENT', amount: iComp,
-                related_loan_id: loan.id, notes: 'Auto-repayment (Interest)',
-                created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
-                created_by: 'Treasurer'
-              });
-           }
-           if (pComp > 0) {
-              newTransactions.push({
-                id: uuidv4(), date, member_id: memberId, account_id: accountId,
-                fund_type: 'PRINCIPAL', transaction_type: 'LOAN_REPAYMENT', amount: pComp,
-                related_loan_id: loan.id, notes: 'Auto-repayment (Principal)',
-                created_at: new Date().toISOString(), last_modified: new Date().toISOString(),
-                created_by: 'Treasurer'
-              });
-           }
-           remainingExtra -= repaymentAmount;
+      const capacity = Math.max(0, DAILY_RATE - existingPaid);
+      if (capacity > 0) {
+        const alloc = Math.min(capacity, remainingPool);
+        if (alloc > 0) {
+          const tId = uuidv4();
+          const noteText = i === 0 
+            ? (notes || 'Daily Share')
+            : `${notes || 'Daily Share'} (Catch-up for ${checkDate})`;
+
+          newTransactions.push({
+            id: tId,
+            date: checkDate,
+            member_id: memberId,
+            account_id: accountId,
+            fund_type: 'PRINCIPAL',
+            transaction_type: 'CONTRIBUTION',
+            amount: alloc,
+            notes: noteText,
+            created_at: new Date().toISOString(),
+            last_modified: new Date().toISOString(),
+            created_by: 'Treasurer'
+          });
+
+          remainingPool -= alloc;
         }
       }
-      updatedAdvanceCredit = remainingExtra;
     }
+
+    // Any remaining pool beyond all current/past missed days becomes advance credit
+    const updatedAdvanceCredit = Math.max(0, remainingPool);
 
     const mappedNewTransactions = newTransactions.map(t => ({
       ...t, memberId: t.member_id, accountId: t.account_id, related_loan_id: t.related_loan_id
     }));
     
-    setTransactions(prev => [...prev, ...mappedNewTransactions]);
+    const nextTransactions = [...transactionsRef.current, ...mappedNewTransactions];
+    transactionsRef.current = nextTransactions;
+    setTransactions(nextTransactions);
+
+    try {
+      localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTransactions));
+    } catch (e) {
+      console.error("Failed to save to localStorage:", e);
+    }
+
     updateMember(memberId, { advance_credit: updatedAdvanceCredit });
 
     if (newTransactions.length > 0) {
-      await supabase.from('transactions').insert(newTransactions);
-      logAudit('CREATED', 'transactions', 'batch', `Added contribution/repayments for ${member.name}`);
+      try {
+        await supabase.from('transactions').insert(newTransactions);
+        logAudit('CREATED', 'transactions', 'batch', `Added contribution for ${member.name}`);
+      } catch (err) {
+        console.warn("Supabase insert error (kept in local storage):", err);
+      }
     }
 
     return null;

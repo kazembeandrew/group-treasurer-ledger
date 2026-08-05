@@ -9,6 +9,7 @@ export interface Member {
   name: string;
   active: boolean;
   advance_credit: number;
+  created_at?: string;
 }
 
 export interface Account {
