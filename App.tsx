@@ -20,10 +20,15 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Check active session on load
-    supabase.auth.getSession()
-      .then(({ data: { session } }: { data: { session: Session | null } }) => {
-        setSession(session);
+    // 1. Check active session on load with timeout to prevent FCP delays
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ data: { session: null } }), 1200));
+
+    Promise.race([sessionPromise, timeoutPromise])
+      .then((res: any) => {
+        if (res && res.data) {
+          setSession(res.data.session);
+        }
       })
       .catch((err: any) => {
         console.error("Session fetch failed:", err);
