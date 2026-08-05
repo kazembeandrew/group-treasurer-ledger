@@ -171,12 +171,24 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (tError) throw tError;
       
       if (transData) {
-        const formattedTrans = transData.map((t: any) => ({
-          ...t,
-          memberId: t.member_id || t.memberId,
-          accountId: t.account_id || t.accountId,
-          related_loan_id: t.related_loan_id
-        }));
+        const cloudMap = new Map<string, any>();
+        transData.forEach((t: any) => {
+          cloudMap.set(t.id, {
+            ...t,
+            memberId: t.member_id || t.memberId,
+            accountId: t.account_id || t.accountId,
+            related_loan_id: t.related_loan_id
+          });
+        });
+
+        // Retain un-synced transactions currently in transactionsRef so pending writes aren't wiped
+        (transactionsRef.current || []).forEach((t: any) => {
+          if (!cloudMap.has(t.id)) {
+            cloudMap.set(t.id, t);
+          }
+        });
+
+        const formattedTrans = Array.from(cloudMap.values());
         setTransactions(formattedTrans);
         transactionsRef.current = formattedTrans;
         try {
@@ -467,8 +479,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (newTransactions.length > 0) {
       try {
-        await supabase.from('transactions').insert(newTransactions);
-        logAudit('CREATED', 'transactions', 'batch', `Added contribution for ${member.name}`);
+        const { error } = await supabase.from('transactions').insert(newTransactions);
+        if (error) {
+          console.error("Supabase contribution insert failed:", error);
+          addNotification(`Database Sync Warning: ${error.message}`, 'error');
+        } else {
+          logAudit('CREATED', 'transactions', 'batch', `Added contribution for ${member.name}`);
+        }
       } catch (err) {
         console.warn("Supabase insert error (kept in local storage):", err);
       }
