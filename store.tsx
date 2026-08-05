@@ -612,7 +612,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     setLoans(prev => [...prev, { ...loanDB, memberId: memberId || undefined, borrowerName: borrowerName || undefined } as Loan]);
-    setTransactions(prev => [...prev, { ...transDB, memberId: memberId || undefined, accountId, related_loan_id: loanId } as Transaction]);
+    const loanTrans = { ...transDB, memberId: memberId || undefined, accountId, related_loan_id: loanId } as Transaction;
+    transactionsRef.current = [...transactionsRef.current, loanTrans];
+    setTransactions(transactionsRef.current);
 
     try {
       await supabase.from('loans').insert(loanDB);
@@ -672,7 +674,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
      }
 
      const localTrans = newTransDB.map(t => ({ ...t, memberId: loan.memberId, accountId: t.account_id, related_loan_id: t.related_loan_id } as Transaction));
-     setTransactions(prev => [...prev, ...localTrans]);
+     transactionsRef.current = [...transactionsRef.current, ...localTrans];
+     setTransactions(transactionsRef.current);
      await supabase.from('transactions').insert(newTransDB);
      logAudit('CREATED', 'transactions', 'batch', `Repayment for loan ${loanId}`);
      return null;
@@ -699,7 +702,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         created_by: 'Treasurer'
     };
 
-    setTransactions(prev => [...prev, { ...transDB, accountId } as Transaction]);
+    const expenseTrans = { ...transDB, accountId } as Transaction;
+    transactionsRef.current = [...transactionsRef.current, expenseTrans];
+    setTransactions(transactionsRef.current);
     await supabase.from('transactions').insert(transDB);
     logAudit('CREATED', 'transactions', id, `Expense: ${notes}`);
     return null;
@@ -736,10 +741,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         created_by: 'Treasurer'
     };
 
-    setTransactions(prev => [...prev, 
-        {...trans1, accountId: fromAccountId } as Transaction, 
-        {...trans2, accountId: toAccountId } as Transaction
-    ]);
+    const t1Local = {...trans1, accountId: fromAccountId } as Transaction;
+    const t2Local = {...trans2, accountId: toAccountId } as Transaction;
+    transactionsRef.current = [...transactionsRef.current, t1Local, t2Local];
+    setTransactions(transactionsRef.current);
     await supabase.from('transactions').insert([trans1, trans2]);
     logAudit('CREATED', 'transactions', 'batch', `Transfer ${amount} ${fundType}`);
     return null;
@@ -763,42 +768,94 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           created_by: 'Treasurer'
       };
 
-      setTransactions(prev => [...prev, { ...transDB, accountId } as Transaction]);
+      const obTrans = { ...transDB, accountId } as Transaction;
+      transactionsRef.current = [...transactionsRef.current, obTrans];
+      setTransactions(transactionsRef.current);
       await supabase.from('transactions').insert(transDB);
       logAudit('CREATED', 'transactions', id, 'Opening Balance');
       return null;
   };
 
   const deleteTransaction = async (id: string) => {
-      const transaction = transactions.find(t => t.id === id);
-      
-      // If it's a LOAN_GIVEN transaction, we should also delete the loan record
-      if (transaction?.transaction_type === 'LOAN_GIVEN' && transaction.related_loan_id) {
-          setLoans(prev => prev.filter(l => l.id !== transaction.related_loan_id));
-          await supabase.from('loans').delete().eq('id', transaction.related_loan_id);
+      // Use transactionsRef for the freshest snapshot (handles pending optimistic writes)
+      const transaction = transactionsRef.current.find(t => t.id === id);
+      if (!transaction) return;
+
+      // --- LOAN_GIVEN: must delete repayments BEFORE the loan (FK constraint order) ---
+      if (transaction.transaction_type === 'LOAN_GIVEN' && transaction.related_loan_id) {
+          const loanId = transaction.related_loan_id;
+
+          // 1. Delete all repayment transactions linked to this loan in DB first
+          const { error: repErr } = await supabase.from('transactions')
+              .delete().eq('related_loan_id', loanId);
+          if (repErr) {
+              addNotification(`Failed to remove repayments: ${repErr.message}`, 'error');
+              return;
+          }
+
+          // 2. Now delete the loan itself
+          const { error: loanErr } = await supabase.from('loans').delete().eq('id', loanId);
+          if (loanErr) {
+              addNotification(`Failed to remove loan: ${loanErr.message}`, 'error');
+              return;
+          }
+
+          // 3. Delete the LOAN_GIVEN tx itself from DB
+          await supabase.from('transactions').delete().eq('id', id);
+
+          // 4. Sync all local state including ref (remove repayments + this tx)
+          const nextTrans = transactionsRef.current.filter(
+              t => t.related_loan_id !== loanId && t.id !== id
+          );
+          transactionsRef.current = nextTrans;
+          setTransactions(nextTrans);
+          setLoans(prev => prev.filter(l => l.id !== loanId));
+          try { localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTrans)); } catch (e) {}
+
+          logAudit('DELETED', 'loans', loanId,
+              `Loan deleted via LOAN_GIVEN tx ${id} | Amt: ${Math.abs(transaction.amount)} MK | Acct: ${transaction.accountId}`);
+          return;
+      }
+
+      // --- Standard single-transaction delete ---
+      const { error } = await supabase.from('transactions').delete().eq('id', id);
+      if (error) {
+          addNotification(`Delete failed: ${error.message}`, 'error');
+          return; // Do NOT mutate local state if Supabase failed
       }
 
       const nextTrans = transactionsRef.current.filter(t => t.id !== id);
       transactionsRef.current = nextTrans;
       setTransactions(nextTrans);
-      try {
-        localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTrans));
-      } catch (e) {}
+      try { localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTrans)); } catch (e) {}
 
-      await supabase.from('transactions').delete().eq('id', id);
-      logAudit('DELETED', 'transactions', id, 'Deleted Transaction');
+      logAudit('DELETED', 'transactions', id,
+          `Deleted ${transaction.transaction_type} | Amt: ${transaction.amount} MK | Fund: ${transaction.fund_type} | Acct: ${transaction.accountId} | Member: ${transaction.memberId ?? 'N/A'} | Date: ${transaction.date}`);
   };
 
   const deleteLoan = async (id: string) => {
-      // Delete associated transactions first
-      setTransactions(prev => prev.filter(t => t.related_loan_id !== id));
-      await supabase.from('transactions').delete().eq('related_loan_id', id);
-      
-      // Delete the loan
+      // 1. Delete all associated transactions in Supabase first (FK: must precede loan delete)
+      const { error: txErr } = await supabase.from('transactions').delete().eq('related_loan_id', id);
+      if (txErr) {
+          addNotification(`Error removing loan transactions: ${txErr.message}`, 'error');
+          return;
+      }
+
+      // 2. Delete the loan record itself
+      const { error: loanErr } = await supabase.from('loans').delete().eq('id', id);
+      if (loanErr) {
+          addNotification(`Error removing loan: ${loanErr.message}`, 'error');
+          return;
+      }
+
+      // 3. Sync ALL local state — including transactionsRef (was missing previously)
+      const nextTrans = transactionsRef.current.filter(t => t.related_loan_id !== id);
+      transactionsRef.current = nextTrans;  // Keep ref in sync for allocation/duplicate checks
+      setTransactions(nextTrans);
       setLoans(prev => prev.filter(l => l.id !== id));
-      await supabase.from('loans').delete().eq('id', id);
-      
-      logAudit('DELETED', 'loans', id, 'Deleted Loan and associated transactions');
+      try { localStorage.setItem('wealthshare_transactions', JSON.stringify(nextTrans)); } catch (e) {}
+
+      logAudit('DELETED', 'loans', id, `Loan and all associated transactions deleted`);
   };
 
   const exportData = () => {
