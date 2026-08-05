@@ -233,14 +233,83 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // --- REALTIME SUBSCRIPTION (Listen to all core table updates) ---
   useEffect(() => {
     if (!isCloudMode) return;
+
     const channel = supabase.channel('schema-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'members' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'loans' }, () => fetchData())
+      // ── TRANSACTIONS ──────────────────────────────────────────────────────────
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, (payload: any) => {
+        const row = payload.new;
+        const formatted = { ...row, memberId: row.member_id, accountId: row.account_id };
+        setTransactions(prev => {
+          // Only add if not already present (our optimistic write already added it)
+          if (prev.some(t => t.id === row.id)) return prev;
+          const next = [...prev, formatted];
+          transactionsRef.current = next;
+          return next;
+        });
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'transactions' }, (payload: any) => {
+        const id = payload.old?.id;
+        if (!id) return;
+        setTransactions(prev => {
+          const next = prev.filter(t => t.id !== id);
+          transactionsRef.current = next;
+          return next;
+        });
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, (payload: any) => {
+        const row = payload.new;
+        const formatted = { ...row, memberId: row.member_id, accountId: row.account_id };
+        setTransactions(prev => {
+          const next = prev.map(t => t.id === row.id ? { ...t, ...formatted } : t);
+          transactionsRef.current = next;
+          return next;
+        });
+      })
+      // ── MEMBERS ───────────────────────────────────────────────────────────────
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'members' }, (payload: any) => {
+        const row = payload.new;
+        setMembers(prev => prev.some(m => m.id === row.id) ? prev : [...prev, row]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'members' }, (payload: any) => {
+        const row = payload.new;
+        setMembers(prev => prev.map(m => m.id === row.id ? { ...m, ...row } : m));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'members' }, (payload: any) => {
+        const id = payload.old?.id;
+        if (id) setMembers(prev => prev.filter(m => m.id !== id));
+      })
+      // ── ACCOUNTS ──────────────────────────────────────────────────────────────
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'accounts' }, (payload: any) => {
+        const row = payload.new;
+        const formatted = { ...row, memberId: row.member_id };
+        setAccounts(prev => prev.some(a => a.id === row.id) ? prev : [...prev, formatted]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'accounts' }, (payload: any) => {
+        const row = payload.new;
+        setAccounts(prev => prev.map(a => a.id === row.id ? { ...a, ...row, memberId: row.member_id } : a));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'accounts' }, (payload: any) => {
+        const id = payload.old?.id;
+        if (id) setAccounts(prev => prev.filter(a => a.id !== id));
+      })
+      // ── LOANS ─────────────────────────────────────────────────────────────────
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'loans' }, (payload: any) => {
+        const row = payload.new;
+        const formatted = { ...row, memberId: row.member_id, borrowerName: row.borrower_name };
+        setLoans(prev => prev.some(l => l.id === row.id) ? prev : [...prev, formatted]);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'loans' }, (payload: any) => {
+        const row = payload.new;
+        setLoans(prev => prev.map(l => l.id === row.id ? { ...l, ...row, memberId: row.member_id, borrowerName: row.borrower_name } : l));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'loans' }, (payload: any) => {
+        const id = payload.old?.id;
+        if (id) setLoans(prev => prev.filter(l => l.id !== id));
+      })
       .subscribe();
+
     return () => { supabase.removeChannel(channel); };
-  }, [fetchData]);
+  }, [isCloudMode]);
 
   // --- BACKGROUND REFRESH ---
   useEffect(() => {
