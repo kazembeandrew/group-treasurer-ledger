@@ -3,8 +3,5 @@
   "description": "A comprehensive savings and loan group management system with automated business rules, loan tracking, and real-time financial dashboards.",
   "requestFramePermissions": [
     "camera"
-  ],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }
